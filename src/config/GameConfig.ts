@@ -367,5 +367,8 @@ export const CHARACTERS: Record<CharacterId, CharacterDef> = {
 };
 
 // Save/meta constants
-export const SAVE_VERSION = 1;
+// v2 adds server-authoritative account fields (level/xp/bestScore) to the profile.
+export const SAVE_VERSION = 2;
 export const SAVE_KEY = 'bh_save';
+/** Set once the local M2 save has been migrated up to the cloud profile. */
+export const MIGRATED_KEY = 'bh_migrated';

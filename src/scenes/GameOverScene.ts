@@ -70,23 +70,36 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // Server-authoritative when online; a dimmed estimate while offline.
+    const coinColor = this.result.isOffline ? COLORS.textMuted : COLORS.coin;
     this.add
       .text(cx, panelY + 20, `+ ${this.result.coinsEarned}`, {
         fontFamily: 'monospace',
         fontSize: '44px',
         fontStyle: 'bold',
-        color: hex(COLORS.coin)
+        color: hex(coinColor)
       })
       .setOrigin(0.5);
 
-    // Total coins
-    this.add
-      .text(cx, panelY + 76, `Total: ${saveService.get().profile.coins} coins`, {
-        fontFamily: 'monospace',
-        fontSize: '22px',
-        color: hex(COLORS.textMuted)
-      })
-      .setOrigin(0.5);
+    if (this.result.isOffline) {
+      // Offline: coins are a display estimate, queued to sync on next launch.
+      this.add
+        .text(cx, panelY + 74, 'offline — syncing on next launch…', {
+          fontFamily: 'monospace',
+          fontSize: '18px',
+          color: hex(COLORS.enemyFast)
+        })
+        .setOrigin(0.5);
+    } else {
+      // Online: cache was refreshed from the server, so this total is authoritative.
+      this.add
+        .text(cx, panelY + 76, `Total: ${saveService.get().profile.coins} coins`, {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: hex(COLORS.textMuted)
+        })
+        .setOrigin(0.5);
+    }
 
     this.buildButton(cx - 180, 810, 300, 90, 'HUB', COLORS.panelBorder, () => this.goHub());
     this.buildButton(cx + 145, 810, 260, 90, 'PLAY AGAIN', COLORS.btnPrimary, () => this.playAgain());

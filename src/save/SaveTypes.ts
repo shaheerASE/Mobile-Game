@@ -5,6 +5,12 @@ export interface SaveProfile {
   coins: number;
   gems: number;
   equippedCharacter: CharacterId;
+  /** Account level — server-authoritative (M3). Static at 1 for now. */
+  level: number;
+  /** Account XP — server-authoritative (M3); accrues via submit_match RPC. */
+  xp: number;
+  /** Best run score — server-authoritative (M3). */
+  bestScore: number;
 }
 
 export type SkillLevels = Record<SkillId, number>;
@@ -23,7 +29,10 @@ export function defaultSave(): SaveData {
     profile: {
       coins: 0,
       gems: 0,
-      equippedCharacter: 'ranger'
+      equippedCharacter: 'ranger',
+      level: 1,
+      xp: 0,
+      bestScore: 0
     },
     upgrades: {
       vitality: 0,

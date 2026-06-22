@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLORS, SKILLS, VIEW, skillCost } from '../config/GameConfig';
 import { saveService } from '../save/SaveService';
+import { backend } from '../services/Backend';
 import type { SkillId } from '../types';
 
 const CARD_W = 620;
@@ -14,6 +15,7 @@ const LIST_TOP = 230;
  */
 export class SkillTreeScene extends Phaser.Scene {
   private coinsBadge!: Phaser.GameObjects.Text;
+  private statusBadge!: Phaser.GameObjects.Text;
   /** Card refresh callbacks keyed by skill id, called after a purchase. */
   private readonly cardUpdaters = new Map<SkillId, () => void>();
 
@@ -51,6 +53,16 @@ export class SkillTreeScene extends Phaser.Scene {
       })
       .setOrigin(1, 0.5);
 
+    // Offline note — purchases are server-authoritative and disabled offline.
+    this.statusBadge = this.add
+      .text(50, 140, '', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: hex(COLORS.enemyFast)
+      })
+      .setOrigin(0, 0.5);
+    if (!backend.online) this.statusBadge.setText('OFFLINE — purchases disabled');
+
     // Build one card per skill.
     const skillIds = Object.keys(SKILLS) as SkillId[];
     skillIds.forEach((id, i) => {
@@ -60,6 +72,40 @@ export class SkillTreeScene extends Phaser.Scene {
 
     // Back button.
     this.buildBackButton(hex);
+  }
+
+  /** Refresh the coins badge and every card (affordability may have changed). */
+  private refreshAll(): void {
+    this.coinsBadge.setText(this.coinsLabel());
+    this.cardUpdaters.forEach((fn) => fn());
+  }
+
+  /**
+   * Server-authoritative purchase: optimistically apply locally, then push the
+   * new coins/upgrades up. If the push fails, reload from the server to snap
+   * back to the true state. Disabled entirely while offline.
+   */
+  private async attemptBuy(id: SkillId, maxLevel: number): Promise<void> {
+    if (!backend.online) return;
+    const save = saveService.get();
+    const level = save.upgrades[id];
+    if (level >= maxLevel) return;
+    const cost = skillCost(level);
+    if (save.profile.coins < cost) return;
+
+    saveService.spendCoins(cost);
+    saveService.setSkillLevel(id, level + 1);
+    this.refreshAll();
+
+    const ok = await backend.pushProgress();
+    if (!ok && this.scene.isActive()) {
+      // Push failed — snap back to the authoritative server state.
+      await backend.refreshProfile();
+      if (this.scene.isActive()) {
+        this.statusBadge.setText('sync failed — try again');
+        this.refreshAll();
+      }
+    }
   }
 
   private buildSkillCard(
@@ -132,15 +178,16 @@ export class SkillTreeScene extends Phaser.Scene {
         bg.setStrokeStyle(2, COLORS.xpBar, 0.6);
       } else {
         const cost = skillCost(level);
-        const canAfford = save.profile.coins >= cost;
-        costText.setText(`Cost: ${cost} coins`);
-        costText.setColor(canAfford ? hex(COLORS.coin) : '#ff5a6e');
+        // Server-authoritative: purchases require an online connection.
+        const canBuy = backend.online && save.profile.coins >= cost;
+        costText.setText(backend.online ? `Cost: ${cost} coins` : `Cost: ${cost} (offline)`);
+        costText.setColor(canBuy ? hex(COLORS.coin) : '#ff5a6e');
         buyBtn
-          .setFillStyle(canAfford ? COLORS.xpBar : COLORS.panelBorder, 1)
+          .setFillStyle(canBuy ? COLORS.xpBar : COLORS.panelBorder, 1)
           .setInteractive({ useHandCursor: true });
         buyLabel
           .setText('BUY')
-          .setColor(canAfford ? hex(COLORS.background) : hex(COLORS.textMuted));
+          .setColor(canBuy ? hex(COLORS.background) : hex(COLORS.textMuted));
       }
     };
 
@@ -154,16 +201,7 @@ export class SkillTreeScene extends Phaser.Scene {
     });
     buyBtn.on(Phaser.Input.Events.POINTER_OUT, () => buyBtn.setAlpha(1));
     buyBtn.on(Phaser.Input.Events.POINTER_DOWN, () => {
-      const save = saveService.get();
-      const level = save.upgrades[id];
-      if (level >= def.maxLevel) return;
-      const cost = skillCost(level);
-      const ok = saveService.spendCoins(cost);
-      if (!ok) return;
-      saveService.setSkillLevel(id, level + 1);
-      this.coinsBadge.setText(this.coinsLabel());
-      // Refresh this card and all others (affordability may change).
-      this.cardUpdaters.forEach((fn) => fn());
+      void this.attemptBuy(id, def.maxLevel);
     });
   }
 

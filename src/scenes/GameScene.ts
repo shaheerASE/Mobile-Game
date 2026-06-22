@@ -18,7 +18,7 @@ import { Spawner } from '../systems/Spawner';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
 import { VirtualJoystick } from '../ui/VirtualJoystick';
-import { saveService } from '../save/SaveService';
+import { backend } from '../services/Backend';
 import type { RunConfig, RunResult, UpgradeKind } from '../types';
 
 /** Payload broadcast to the HUD scene each frame. */
@@ -143,7 +143,7 @@ export class GameScene extends Phaser.Scene {
     const enemy = obj2 as Enemy;
     if (!enemy.active || this.gameOver) return;
     this.player.takeDamage(enemy.contactDamage, this.time.now);
-    if (this.player.isDead) this.endRun();
+    if (this.player.isDead) void this.endRun();
   };
 
   private dropGem(x: number, y: number, xp: number): void {
@@ -191,24 +191,32 @@ export class GameScene extends Phaser.Scene {
     if (!this.levelingUp) this.checkLevelUp();
   }
 
-  private endRun(): void {
+  private async endRun(): Promise<void> {
     if (this.gameOver) return;
     this.gameOver = true;
     this.player.setVelocity(0, 0);
+    this.scene.stop('HUD');
 
     const greedMult = this.runConfig?.greedMult ?? 1;
-    const coinsEarned = computeCoins(this.elapsedMs, this.kills, this.level, greedMult);
-    saveService.addCoins(coinsEarned);
+    const durationSeconds = Math.floor(this.elapsedMs / 1000);
+    // Display-only estimate — shown when the server can't be reached. Never
+    // committed locally; the server is authoritative for the real total.
+    const displayEstimate = computeCoins(this.elapsedMs, this.kills, this.level, greedMult);
+
+    // Rewards are computed server-side; on failure the run is queued offline.
+    const outcome = await backend.submitRun(durationSeconds, this.kills, this.level);
 
     const result: RunResult = {
       survivedMs: this.elapsedMs,
       kills: this.kills,
       level: this.level,
       score: computeScore(this.elapsedMs, this.kills, this.level),
-      coinsEarned
+      coinsEarned: outcome.isOffline ? displayEstimate : outcome.coins,
+      serverCoins: outcome.isOffline ? undefined : outcome.coins,
+      serverXp: outcome.isOffline ? undefined : outcome.xp,
+      isOffline: outcome.isOffline
     };
 
-    this.scene.stop('HUD');
     this.scene.launch('GameOver', result);
     this.scene.pause();
   }

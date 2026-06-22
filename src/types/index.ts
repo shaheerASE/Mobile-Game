@@ -77,4 +77,10 @@ export interface RunResult {
   level: number;
   score: number;
   coinsEarned: number;
+  /** Server-confirmed coins for this run (set when submit_match succeeded). */
+  serverCoins?: number;
+  /** Server-confirmed account XP gained this run. */
+  serverXp?: number;
+  /** True when the run was queued offline; coinsEarned is a display estimate. */
+  isOffline?: boolean;
 }

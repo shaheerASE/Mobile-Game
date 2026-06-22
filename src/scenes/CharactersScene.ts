@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { CHARACTERS, COLORS, VIEW } from '../config/GameConfig';
 import { saveService } from '../save/SaveService';
+import { backend } from '../services/Backend';
 import type { CharacterId } from '../types';
 
 const CARD_W = 620;
@@ -15,6 +16,7 @@ const LIST_TOP = 210;
  */
 export class CharactersScene extends Phaser.Scene {
   private coinsBadge!: Phaser.GameObjects.Text;
+  private statusBadge!: Phaser.GameObjects.Text;
   private readonly cardRefreshers = new Map<CharacterId, () => void>();
 
   constructor() {
@@ -46,6 +48,16 @@ export class CharactersScene extends Phaser.Scene {
       })
       .setOrigin(1, 0.5);
 
+    // Offline note — unlock / select mutate the cloud profile, disabled offline.
+    this.statusBadge = this.add
+      .text(50, 140, '', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: hex(COLORS.enemyFast)
+      })
+      .setOrigin(0, 0.5);
+    if (!backend.online) this.statusBadge.setText('OFFLINE — changes disabled');
+
     const charIds: CharacterId[] = ['ranger', 'bruiser', 'phantom'];
     charIds.forEach((id, i) => {
       const y = LIST_TOP + i * (CARD_H + CARD_GAP) + CARD_H / 2;
@@ -53,6 +65,42 @@ export class CharactersScene extends Phaser.Scene {
     });
 
     this.buildBackButton(hex);
+  }
+
+  private refreshAll(): void {
+    this.coinsBadge.setText(this.coinsLabel());
+    this.cardRefreshers.forEach((fn) => fn());
+  }
+
+  /**
+   * Server-authoritative unlock / equip: apply locally, then push up. On a push
+   * failure, reload from the server to snap back. Disabled while offline since
+   * both actions mutate the authoritative profile.
+   */
+  private async attemptAction(id: CharacterId, cost: number): Promise<void> {
+    if (!backend.online) return;
+    const save = saveService.get();
+    if (save.profile.equippedCharacter === id) return;
+
+    const owned = save.characters.includes(id);
+    if (owned) {
+      saveService.equipCharacter(id);
+    } else {
+      if (save.profile.coins < cost) return;
+      saveService.spendCoins(cost);
+      saveService.unlockCharacter(id);
+      saveService.equipCharacter(id);
+    }
+    this.refreshAll();
+
+    const ok = await backend.pushProgress();
+    if (!ok && this.scene.isActive()) {
+      await backend.refreshProfile();
+      if (this.scene.isActive()) {
+        this.statusBadge.setText('sync failed — try again');
+        this.refreshAll();
+      }
+    }
   }
 
   private buildCharCard(
@@ -140,21 +188,23 @@ export class CharactersScene extends Phaser.Scene {
         actionLabel.setText('ACTIVE').setColor(hex(COLORS.background));
         costBadge.setText('');
       } else if (owned) {
+        // Selecting an owned character requires an online connection.
+        const enabled = backend.online;
         actionBtn
           .setFillStyle(COLORS.panel, 1)
-          .setStrokeStyle(2, def.color, 0.9)
+          .setStrokeStyle(2, enabled ? def.color : COLORS.panelBorder, 0.9)
           .setInteractive({ useHandCursor: true });
-        actionLabel.setText('SELECT').setColor(hex(def.color));
+        actionLabel.setText('SELECT').setColor(enabled ? hex(def.color) : hex(COLORS.textMuted));
         costBadge.setText('');
       } else {
-        const canAfford = save.profile.coins >= def.cost;
+        const canBuy = backend.online && save.profile.coins >= def.cost;
         actionBtn
-          .setFillStyle(canAfford ? COLORS.xpBar : COLORS.panelBorder, 1)
+          .setFillStyle(canBuy ? COLORS.xpBar : COLORS.panelBorder, 1)
           .setInteractive({ useHandCursor: true });
         actionLabel
           .setText('UNLOCK')
-          .setColor(canAfford ? hex(COLORS.background) : hex(COLORS.textMuted));
-        costBadge.setText(`⬡ ${def.cost}`).setColor(canAfford ? hex(COLORS.coin) : '#ff5a6e');
+          .setColor(canBuy ? hex(COLORS.background) : hex(COLORS.textMuted));
+        costBadge.setText(`⬡ ${def.cost}`).setColor(canBuy ? hex(COLORS.coin) : '#ff5a6e');
       }
     };
 
@@ -164,23 +214,7 @@ export class CharactersScene extends Phaser.Scene {
     actionBtn.on(Phaser.Input.Events.POINTER_OVER, () => actionBtn.setAlpha(0.8));
     actionBtn.on(Phaser.Input.Events.POINTER_OUT, () => actionBtn.setAlpha(1));
     actionBtn.on(Phaser.Input.Events.POINTER_DOWN, () => {
-      const save = saveService.get();
-      const owned = save.characters.includes(id);
-      const equipped = save.profile.equippedCharacter === id;
-      if (equipped) return;
-
-      if (owned) {
-        saveService.equipCharacter(id);
-      } else {
-        if (save.profile.coins < def.cost) return;
-        const ok = saveService.spendCoins(def.cost);
-        if (!ok) return;
-        saveService.unlockCharacter(id);
-        saveService.equipCharacter(id);
-      }
-
-      this.coinsBadge.setText(this.coinsLabel());
-      this.cardRefreshers.forEach((fn) => fn());
+      void this.attemptAction(id, def.cost);
     });
   }
 

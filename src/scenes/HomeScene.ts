@@ -2,12 +2,22 @@ import Phaser from 'phaser';
 import { COLORS, VIEW } from '../config/GameConfig';
 import { saveService } from '../save/SaveService';
 import { resolveRunConfig } from '../systems/MetaBonusResolver';
+import { backend } from '../services/Backend';
 
 /**
  * Hub shown on launch and after returning from Game Over. Displays the
  * currency balance and routes to Play, Skill Tree, or Characters.
+ *
+ * M3: kicks off the Supabase backend bootstrap (anonymous sign-in, one-time
+ * legacy migration, server-authoritative profile load, outbox drain) and
+ * refreshes the currency display once it resolves.
  */
 export class HomeScene extends Phaser.Scene {
+  private coinsText!: Phaser.GameObjects.Text;
+  private gemsText!: Phaser.GameObjects.Text;
+  private statusText!: Phaser.GameObjects.Text;
+  private charLabel!: Phaser.GameObjects.Text;
+
   constructor() {
     super('Home');
   }
@@ -58,7 +68,7 @@ export class HomeScene extends Phaser.Scene {
 
     // Selected character label.
     const charId = saveService.get().profile.equippedCharacter;
-    this.add
+    this.charLabel = this.add
       .text(cx, 870, `Character: ${charId.toUpperCase()}`, {
         fontFamily: 'monospace',
         fontSize: '24px',
@@ -66,14 +76,46 @@ export class HomeScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // Version / build label.
-    this.add
-      .text(cx, VIEW.height - 40, 'Milestone 2', {
+    // Connection status / build label.
+    this.statusText = this.add
+      .text(cx, VIEW.height - 40, 'connecting…', {
         fontFamily: 'monospace',
         fontSize: '20px',
         color: hex(COLORS.textMuted)
       })
       .setOrigin(0.5);
+
+    // Kick off (or refresh) the backend, then update the UI.
+    void this.initBackend(hex);
+  }
+
+  /** Bootstrap on first launch; lighter refresh on subsequent Home visits. */
+  private async initBackend(hex: (c: number) => string): Promise<void> {
+    if (!backend.isReady()) {
+      await backend.bootstrap();
+    } else if (backend.online) {
+      await backend.refreshProfile();
+    }
+
+    // The scene may have been stopped while we awaited — bail if so.
+    if (!this.scene.isActive()) return;
+
+    this.refreshCurrency();
+
+    const charId = saveService.get().profile.equippedCharacter;
+    this.charLabel.setText(`Character: ${charId.toUpperCase()}`);
+
+    if (backend.online) {
+      this.statusText.setText('online — progress synced').setColor(hex(COLORS.gem));
+    } else {
+      this.statusText.setText('offline — purchases disabled').setColor(hex(COLORS.enemyFast));
+    }
+  }
+
+  private refreshCurrency(): void {
+    const save = saveService.get();
+    this.coinsText.setText(`${save.profile.coins}`);
+    this.gemsText.setText(`${save.profile.gems}`);
   }
 
   private buildCurrencyBar(hex: (c: number) => string): void {
@@ -90,7 +132,7 @@ export class HomeScene extends Phaser.Scene {
       .text(90, y, '⬡', { fontFamily: 'monospace', fontSize: '36px', color: hex(COLORS.coin) })
       .setOrigin(0.5);
 
-    this.add
+    this.coinsText = this.add
       .text(160, y, `${save.profile.coins}`, {
         fontFamily: 'monospace',
         fontSize: '32px',
@@ -104,7 +146,7 @@ export class HomeScene extends Phaser.Scene {
       .text(420, y, '◆', { fontFamily: 'monospace', fontSize: '36px', color: hex(COLORS.gem) })
       .setOrigin(0.5);
 
-    this.add
+    this.gemsText = this.add
       .text(490, y, `${save.profile.gems}`, {
         fontFamily: 'monospace',
         fontSize: '32px',
